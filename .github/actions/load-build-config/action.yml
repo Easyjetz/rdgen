@@ -1,0 +1,54 @@
+name: Load isolated RustDesk build configuration
+description: Read the approved configuration from a GitHub secret without contacting the VPS
+inputs:
+  config_json:
+    required: true
+    description: JSON from RUSTDESK_BUILD_CONFIG
+  platform:
+    required: true
+    description: Target platform
+runs:
+  using: composite
+  steps:
+    - shell: python
+      env:
+        BUILD_CONFIG_JSON: ${{ inputs.config_json }}
+        BUILD_PLATFORM: ${{ inputs.platform }}
+      run: |
+        import base64, json, os
+        raw = os.environ.pop("BUILD_CONFIG_JSON", "")
+        if not raw:
+            raise SystemExit("Repository secret RUSTDESK_BUILD_CONFIG is missing")
+        cfg = json.loads(raw)
+        platform = os.environ["BUILD_PLATFORM"]
+        suffix = {"windows": "windows-x64", "windows-x86": "windows-x86", "linux": "linux", "macos": "macos"}[platform]
+        overrides = cfg["custom_settings"]["override-settings"]
+        assert overrides["allow-remote-config-modification"] == "Y"
+        assert overrides["direct-server"] == "Y"
+        assert overrides["allow-remove-wallpaper"] == "N"
+        assert "password" not in cfg["custom_settings"], "A permanent password was not requested"
+        assert cfg["apiServer"].startswith("https://")
+        values = {key: cfg.get(key, "") for key in (
+            "server", "serverPort", "key", "apiServer", "appname", "compname",
+            "urlLink", "downloadLink", "delayFix", "xOffline", "removeNewVersionNotif",
+            "update_public_key", "androidappid", "themeColor", "themeSurfaceLight",
+            "themeSurfaceDark", "themeMeColor"
+        )}
+        values["custom"] = base64.b64encode(json.dumps(cfg["custom_settings"], ensure_ascii=True).encode("ascii")).decode("ascii")
+        values["filename"] = "rustdesk-1.5.3-" + suffix
+        values["uuid"] = os.environ["GITHUB_RUN_ID"] + "-" + platform
+        values["rdgen"] = "artifacts"
+        values["genurl"] = ""
+        for prefix in ("icon", "logo", "privacy"):
+            values[prefix + "link_url"] = "false"
+            values[prefix + "link_uuid"] = "false"
+            values[prefix + "link_file"] = "false"
+        for key in ("server", "key", "apiServer", "custom"):
+            print("::add-mask::" + values[key])
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+            for key, value in values.items():
+                value = str(value)
+                if "\n" in value or "\r" in value:
+                    raise SystemExit("Unexpected multiline value for " + key)
+                env_file.write(key + "=" + value + "\n")
+        print("Approved configuration loaded; no VPS requests are used.")

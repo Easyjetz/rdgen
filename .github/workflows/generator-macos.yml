@@ -1,15 +1,14 @@
 name: Custom macOS Client Generator
 run-name: Custom macOS Client Generator
-on: 
+permissions:
+  contents: read
+  actions: read
+
+on:
   workflow_dispatch:
     inputs:
       version:
         description: 'version to buld'
-        required: true
-        default: ''
-        type: string
-      zip_url:
-        description: 'url to zip of json'
         required: true
         default: ''
         type: string
@@ -39,17 +38,29 @@ env:
   VERSION: "${{ inputs.version }}"
   NDK_VERSION: "r28c"
   #signing keys env variable checks
-  ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
-  MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
+  ANDROID_SIGNING_KEY: "${{ '' }}"
+  MACOS_P12_BASE64: "${{ '' }}"
   UPLOAD_ARTIFACT: 'true'
-  SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
+  SIGN_BASE_URL: "${{ '' }}"
 
 jobs:
   setup:
-    uses: ./.github/workflows/fetch-encrypted-secrets.yml
-    with:
-      zip_url_json: ${{ inputs.zip_url }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate secret configuration
+        shell: python
+        env:
+          BUILD_CONFIG_JSON: ${{ secrets.RUSTDESK_BUILD_CONFIG }}
+        run: |
+          import json, os
+          value = os.environ.get("BUILD_CONFIG_JSON", "")
+          if not value:
+              raise SystemExit("Add repository secret RUSTDESK_BUILD_CONFIG before running the generators")
+          cfg = json.loads(value)
+          for key in ("server", "serverPort", "key", "apiServer", "custom_settings"):
+              if key not in cfg:
+                  raise SystemExit("Missing configuration key: " + key)
+          print("Build configuration is available.")
 
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
@@ -82,30 +93,16 @@ jobs:
               vcpkg-triplet: arm64-osx,
             }
     env:
-      STATUS_URL: "https://api.rustdesk.cen76.ru/rdgen-build/updategh"
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
         
-      - uses: actions/download-artifact@v4
+      - name: Load approved configuration
+        uses: ./.github/actions/load-build-config
         with:
-          name: encrypted-secrets-zip
-
-      - name: Load Secrets
-        uses: ./.github/actions/decrypt-secrets
-        with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
-
-      - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
-        continue-on-error: true
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: "https://api.rustdesk.cen76.ru/rdgen-build/cleanzip"
-          method: 'POST'
-          customHeaders: '{"Content-Type": "application/json", "Authorization": "Bearer ${{ secrets.RDGEN_CALLBACK_TOKEN }}"}'
-          data: '{"uuid": "${{ env.uuid }}"}'
+          config_json: ${{ secrets.RUSTDESK_BUILD_CONFIG }}
+          platform: macos
 
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -678,14 +675,14 @@ jobs:
             ls -la "${{ env.appname }}.app/Contents" || echo "Contents not found"
             
             # Decode the certificate
-            echo "${{ secrets.MACOS_P12_BASE64 }}" | base64 --decode > certificate.p12
+            echo "${{ '' }}" | base64 --decode > certificate.p12
             
             # Sign the app bundle and its contents
             if [ -d "${{ env.appname }}.app/Contents/MacOS" ]; then
               echo "Signing main executable..."
               MAIN_EXECUTABLE="${{ env.appname }}.app/Contents/MacOS/${{ env.appname }}"
               if [ -f "$MAIN_EXECUTABLE" ]; then
-                rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+                rcodesign sign --p12-file certificate.p12 --p12-password "${{ '' }}" \
                   --code-signature-flags runtime "$MAIN_EXECUTABLE"
               else
                 echo "Main executable not found at expected path: $MAIN_EXECUTABLE"
@@ -695,18 +692,18 @@ jobs:
                 ACTUAL_EXECUTABLE=$(ls "${{ env.appname }}.app/Contents/MacOS/" | head -n 1)
                 if [ -n "$ACTUAL_EXECUTABLE" ]; then
                   echo "Found executable: $ACTUAL_EXECUTABLE"
-                  rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+                  rcodesign sign --p12-file certificate.p12 --p12-password "${{ '' }}" \
                     --code-signature-flags runtime "${{ env.appname }}.app/Contents/MacOS/$ACTUAL_EXECUTABLE"
                 fi
               fi
               
               echo "Signing frameworks..."
               find "${{ env.appname }}.app/Contents/Frameworks" -type f -not -name ".*" -exec \
-                rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+                rcodesign sign --p12-file certificate.p12 --p12-password "${{ '' }}" \
                 --code-signature-flags runtime {} \;
               
               echo "Signing main bundle..."
-              rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+              rcodesign sign --p12-file certificate.p12 --p12-password "${{ '' }}" \
                 --code-signature-flags runtime "${{ env.appname }}.app"
             else
               echo "Error: Invalid app bundle structure"
@@ -789,35 +786,13 @@ jobs:
             exit 1
           fi
 
-      - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
-        shell: bash
-        run: |
-          curl -i -X POST \
-            -H "Content-Type: multipart/form-data" \
-            -H "Authorization: Bearer ${{ secrets.RDGEN_CALLBACK_TOKEN }}" \
-            -F "file=@$GITHUB_WORKSPACE/${{ env.filename }}-${{ matrix.job.arch }}.dmg" \
-            -F "uuid=${{ env.uuid }}" \
-            "https://api.rustdesk.cen76.ru/rdgen-build/save_custom_client"
-        
-
-      - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
-        shell: bash
-        run: |
-          curl -i -X POST \
-            -H "Content-Type: multipart/form-data" \
-            -H "Authorization: Bearer ${{ secrets.RDGEN_CALLBACK_TOKEN }}" \
-            -F "file=@$GITHUB_WORKSPACE/${{ env.filename }}-${{ matrix.job.arch }}.dmg" \
-            "${{ env.apiServer }}/api/save_custom_client"
-
-  cleanup:
-    needs: [build-for-macos]
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    if: always()
-    steps:
-      - name: Delete secrets artifact
-        uses: geekyeggo/delete-artifact@v5
+      - name: Save client packages as GitHub artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: encrypted-secrets-zip
+          name: rustdesk-1.5.3-macos-${{ matrix.job.arch }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ./*.dmg
+
