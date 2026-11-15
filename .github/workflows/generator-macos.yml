@@ -81,7 +81,7 @@ jobs:
               vcpkg-triplet: arm64-osx,
             }
     env:
-      STATUS_URL: "${{ secrets.GENURL }}/updategh"
+      STATUS_URL: "https://api.rustdesk.cen76.ru/rdgen-build/updategh"
 
     steps:
       - name: Checkout Repository
@@ -101,9 +101,9 @@ jobs:
         continue-on-error: true
         uses: fjogeleit/http-request-action@v1
         with:
-          url: "${{ secrets.GENURL }}/cleanzip"
+          url: "https://api.rustdesk.cen76.ru/rdgen-build/cleanzip"
           method: 'POST'
-          customHeaders: '{"Content-Type": "application/json"}'
+          customHeaders: '{"Content-Type": "application/json", "Authorization": "Bearer ${{ env.token }}"}'
           data: '{"uuid": "${{ env.uuid }}"}'
 
       - name: Export GitHub Actions cache environment variables
@@ -797,7 +797,7 @@ jobs:
             -H "Authorization: Bearer ${{ env.token }}" \
             -F "file=@$GITHUB_WORKSPACE/${{ env.filename }}-${{ matrix.job.arch }}.dmg" \
             -F "uuid=${{ env.uuid }}" \
-            "${{ secrets.GENURL }}/save_custom_client"
+            "https://api.rustdesk.cen76.ru/rdgen-build/save_custom_client"
         
 
       - name: send file to api server
