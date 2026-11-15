@@ -92,8 +92,6 @@ jobs:
               arch: aarch64,
               vcpkg-triplet: arm64-osx,
             }
-    env:
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
